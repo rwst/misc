@@ -10,7 +10,8 @@ C-finite infinite sequences satisfy homogenous linear recurrences with constant 
     
 CFiniteSequences are completely defined by their ordinary generating function (o.g.f., which
 is always a :mod:`fraction <sage.rings.fraction_field_element>` of
-:mod:`polynomials <sage.rings.polynomial.polynomial_element>` over `\mathbb{Z}` or `\mathbb{Q}` ).
+:mod:`polynomials <sage.rings.polynomial.polynomial_element>` over `\mathbb{Z}`, `\mathbb{Q}`,
+or any finite field).
 
 EXAMPLES::
 
@@ -23,7 +24,7 @@ EXAMPLES::
     sage: fibo.parent().category()
     Category of quotient fields
     
-Finite subsets of the sequence are accessible via python slices::
+Subsets of the sequence are accessible via python slices::
 
     sage: fibo[137]                 #the 137th term of the Fibonacci sequence
     19134702400093278081449423917
@@ -33,6 +34,13 @@ Finite subsets of the sequence are accessible via python slices::
     [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
     sage: fibo[14:4:-2]
     [377, 144, 55, 21, 8]
+    sage: R.<x>=PolynomialRing(GF(5),'x')
+    sage: s = CFiniteSequence(x/(1-x-x^2))    # Fibonacci mod 5
+    sage: s[0:20]
+    [0, 1, 1, 2, 3, 0, 3, 3, 1, 4, 0, 4, 4, 3, 2, 0, 2, 2, 4, 1]
+    sage: s.parent()
+    Fraction Field of Univariate Polynomial Ring in x over Finite Field of size 5
+
 
 They can be created also from the coefficients and start values of a recurrence::
 
@@ -83,6 +91,9 @@ from sage.rings.polynomial.polynomial_ring_constructor import PolynomialRing
 from sage.rings.laurent_series_ring import LaurentSeriesRing
 from sage.rings.power_series_ring import PowerSeriesRing
 from sage.rings.fraction_field_element import FractionFieldElement
+from sage.rings.fraction_field_FpT import FpTElement
+from sage.rings.big_oh import O
+from sage.rings.finite_rings.finite_field_base import is_FiniteField
 
 from sage.matrix.berlekamp_massey import berlekamp_massey
 from sage.interfaces.gp import Gp
@@ -153,11 +164,11 @@ class CFiniteSequence(FractionFieldElement):
         NotImplementedError: Multidimensional o.g.f. not implemented.
         """
 
-        br = ogf.base_ring()
-        if (br <> QQ) and (br <> ZZ):
-            raise ValueError('O.g.f. base not rational.')
+        self._br = ogf.base_ring()
+        if (self._br <> QQ) and (self._br <> ZZ) and not is_FiniteField(self._br):
+            raise ValueError('O.g.f. base not proper.')
         
-        P = PolynomialRing(QQ, 'x')
+        P = PolynomialRing(self._br, 'x')
         if ogf in QQ:
             ogf = P(ogf)
         if hasattr(ogf,'numerator'):
@@ -181,7 +192,7 @@ class CFiniteSequence(FractionFieldElement):
         if isinstance (ogf, FractionFieldElement) and den == 1:
             ogf = num        # case p(x)/1: fall through
             
-        if isinstance (ogf, FractionFieldElement):
+        if isinstance (ogf, (FractionFieldElement, FpTElement)):
             x = P.gen()
             if num.constant_coefficient() == 0:
                 self._off = num.valuation()
@@ -203,13 +214,13 @@ class CFiniteSequence(FractionFieldElement):
                 den = x**(-self._off) * den
 
             # determine start values (may be different from _get_item_ values)
-            R = LaurentSeriesRing(QQ, 'x')
+            R = LaurentSeriesRing(self._br, 'x')
             rem = num % den
             alen = max(self._deg, num.degree() + 1)
             R.set_default_prec (alen)
             if den <> 1:
-                self._a = R(num/den).list()
-                self._aa = R(rem/den).list()[:self._deg]  # needed for _get_item_
+                self._a = R(num/(den+O(x**alen))).list()
+                self._aa = R(rem/(den+O(x**alen))).list()[:self._deg]  # needed for _get_item_
             else:
                 self._a = num.list()
             if len(self._a) < alen:
@@ -478,13 +489,13 @@ class CFiniteSequence(FractionFieldElement):
             wp = quo[key - self._off]
             if key < self._off:
                 return wp
-            A = Matrix(QQ, 1, d, self._c)
-            B = Matrix.identity(QQ, d - 1)
-            C = Matrix(QQ, d - 1, 1, 0)
+            A = Matrix(self._br, 1, d, self._c)
+            B = Matrix.identity(self._br, d - 1)
+            C = Matrix(self._br, d - 1, 1, 0)
             if quo == 0:
-                V = Matrix(QQ, d, 1, self._a[:d][::-1])
+                V = Matrix(self._br, d, 1, self._a[:d][::-1])
             else:
-                V = Matrix(QQ, d, 1, self._aa[:d][::-1])
+                V = Matrix(self._br, d, 1, self._aa[:d][::-1])
             M = Matrix.block([[A], [B, C]], subdivide=False)
 
             return wp + list(M ** (key - self._off) * V)[d-1][0]
@@ -618,9 +629,11 @@ class CFiniteSequence(FractionFieldElement):
         
         with ``c_i`` constants, ``r_i`` the roots of the o.g.f. denominator, and ``s`` the offset of
         the sequence (see for example :arxiv:`0704.2481`).
+        
+        A221304
         """
         from sage.symbolic.ring import SR
-        whole, parts = (self.ogf()).partial_fraction_decomposition()
+        __, parts = (self.ogf()).partial_fraction_decomposition()
         cm = lcm([part.factor().unit().denominator() for part in parts])
         expr = SR(0)
         for part in parts:
