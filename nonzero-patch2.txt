@@ -1,0 +1,141 @@
+From 5a0c829199b6e4bedff3095f218ca77eca509b76 Mon Sep 17 00:00:00 2001
+From: Ralf Stephan <ralf@ark.in-berlin.de>
+Date: Wed, 23 Sep 2015 15:49:11 +0000
+Subject: code changes in consequence of 19040
+
+---
+diff --git a/src/sage/calculus/calculus.py b/src/sage/calculus/calculus.py
+index c895e9c..a5d6996 100644
+--- a/src/sage/calculus/calculus.py
++++ b/src/sage/calculus/calculus.py
+@@ -962,10 +962,11 @@ def minpoly(ex, var='x', algorithm=None, bits=None, degree=None, epsilon=0):
+                         error = abs(g(aa))
+                         if error < expected_error:
+                             # See if we can prove equality exactly
+-                            if g(ex).simplify_trig().canonicalize_radical() == 0:
++                            if (g(ex).simplify_trig().canonicalize_radical() == 0).holds():
+                                 return g
+                             # Otherwise fall back to numerical guess
+-                            elif epsilon and error < epsilon:
++                            elif ((epsilon and error < epsilon)
++                                or (epsilon==0 and error==0)):
+                                 return g
+                             elif algorithm is not None:
+                                 raise NotImplementedError("Could not prove minimal polynomial %s (epsilon %s)" % (g, RR(error).str(no_sci=False)))
+diff --git a/src/sage/combinat/finite_state_machine.py b/src/sage/combinat/finite_state_machine.py
+index 007dac9..5764872 100644
+--- a/src/sage/combinat/finite_state_machine.py
++++ b/src/sage/combinat/finite_state_machine.py
+@@ -3960,7 +3960,12 @@ class FiniteStateMachine(SageObject):
+             True
+         """
+         def default_is_zero(expression):
+-            return expression.is_zero()
++            # symbolic expressions must be provably zero
++            from sage.symbolic.expression import Expression
++            if isinstance(expression, Expression):
++                return (expression == 0).holds()
++            else:
++                return expression.is_zero()
+ 
+         is_zero_function = default_is_zero
+         if is_zero is not None:
+diff --git a/src/sage/functions/bessel.py b/src/sage/functions/bessel.py
+index 10fc617..14a98c2 100644
+--- a/src/sage/functions/bessel.py
++++ b/src/sage/functions/bessel.py
+@@ -824,7 +824,8 @@ class Function_Bessel_K(BuiltinFunction):
+             0.60190723019723457473754000153561733926
+         """
+         # special identity
+-        if n == Integer(1) / Integer(2) and x > 0:
++        from sage.symbolic.ring import SR
++        if n == Integer(1) / Integer(2) and (SR(x) > 0).holds():
+             return sqrt(pi / 2) * exp(-x) * x ** (-Integer(1) / Integer(2))
+ 
+     def _evalf_(self, n, x, parent=None, algorithm=None):
+diff --git a/src/sage/geometry/polyhedron/base.py b/src/sage/geometry/polyhedron/base.py
+index 0d3fe99..e938562 100644
+--- a/src/sage/geometry/polyhedron/base.py
++++ b/src/sage/geometry/polyhedron/base.py
+@@ -3631,8 +3631,12 @@ class Polyhedron_base(Element):
+         if len(p)!=self.ambient_dim():
+             return False
+ 
++        from sage.symbolic.expression import Expression
+         for H in self.Hrep_generator():
+-            if not H.contains(p):
++            res = H.contains(p)
++            if isinstance(res, Expression):
++                res = res.holds()
++            if not res is True:
+                 return False
+         return True
+ 
+diff --git a/src/sage/rings/arith.py b/src/sage/rings/arith.py
+index f2cd14e..6b5b16f 100644
+--- a/src/sage/rings/arith.py
++++ b/src/sage/rings/arith.py
+@@ -214,6 +214,7 @@ def algdep(z, degree, known_bits=None, use_bits=None, known_digits=None, use_dig
+         LLL = M.LLL(delta=.75)
+         coeffs = LLL[0][:n]
+         if height_bound:
++            from sage.rings.real_mpfr import RR
+             def norm(v):
+                 # norm on an integer vector invokes Integer.sqrt() which tries to factor...
+                 from sage.rings.real_mpfi import RIF
+@@ -222,10 +223,10 @@ def algdep(z, degree, known_bits=None, use_bits=None, known_digits=None, use_dig
+                 if proof:
+                     # Given an LLL reduced basis $b_1, ..., b_n$, we only
+                     # know that $|b_1| <= 2^((n-1)/2) |x|$ for non-zero $x \in L$.
+-                    if norm(LLL[0]) <= 2**((n-1)/2) * n.sqrt() * height_bound:
++                    if norm(LLL[0]).upper() <= 2**((n-1)/2) * RR(n).sqrt() * height_bound:
+                         raise ValueError("insufficient precision for non-existence proof")
+                 return None
+-            elif proof and norm(LLL[1]) < 2**((n-1)/2) * max(norm(LLL[0]), n.sqrt()*height_bound):
++            elif proof and norm(LLL[1]).upper() < 2**((n-1)/2) * max(norm(LLL[0]).upper(), RR(n).sqrt() * height_bound):
+                 raise ValueError("insufficient precision for uniqueness proof")
+         if coeffs[degree] < 0:
+             coeffs = -coeffs
+diff --git a/src/sage/symbolic/expression.pyx b/src/sage/symbolic/expression.pyx
+index 6f2fd71..7cfd4d2 100644
+--- a/src/sage/symbolic/expression.pyx
++++ b/src/sage/symbolic/expression.pyx
+@@ -2766,7 +2766,7 @@ cdef class Expression(CommutativeRingElement):
+             sage: (x<y).contradicts({x: 30, y: 20})
+             True
+         """
+-        return bool(self.negation().subs(soln))
++        return (self.negation().subs(soln)).satisfiable()
+ 
+     def is_unit(self):
+         """
+diff --git a/src/sage/symbolic/ginac.pxd b/src/sage/symbolic/ginac.pxd
+index 95b10bb..41c776b 100644
+--- a/src/sage/symbolic/ginac.pxd
++++ b/src/sage/symbolic/ginac.pxd
+@@ -421,6 +421,9 @@ cdef extern from "sage/symbolic/ginac_wrap.h":
+     unsigned find_function "GiNaC::function::find_function" (char* name,
+             unsigned nargs) except +ValueError
+ 
++    bint has_symbol "GiNaC::has_symbol" (GEx ex)
++    bint has_symbol_or_function "GiNaC::has_symbol_or_function" (GEx ex)
++
+     GFunctionOptVector g_registered_functions \
+             "GiNaC::function::registered_functions" ()
+ 
+diff --git a/src/sage/symbolic/ring.pyx b/src/sage/symbolic/ring.pyx
+index bdf639a..58f4c15 100644
+--- a/src/sage/symbolic/ring.pyx
++++ b/src/sage/symbolic/ring.pyx
+@@ -820,7 +820,7 @@ cdef unsigned sage_domain_to_ginac_domain(object domain) except -1:
+     else:
+         raise ValueError(repr(domain)+": domain must be one of 'complex', 'real', 'positive' or 'integer'")
+ 
+-cdef send_sage_domain_to_maxima(Expression v, object domain) except +:
++cdef void send_sage_domain_to_maxima(Expression v, object domain) except +:
+     from sage.symbolic.assumptions import assume
+     # convert the domain argument to something easy to parse
+     if domain is RR or domain == 'real':
+--
+cgit v0.9.2

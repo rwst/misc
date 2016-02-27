@@ -1,0 +1,76 @@
+From 857dc9c5f4e390faaacebb77bb4f60162aebd805 Mon Sep 17 00:00:00 2001
+From: Ralf Stephan <ralf@ark.in-berlin.de>
+Date: Sun, 27 Sep 2015 06:06:03 +0000
+Subject: 19040: add dedicated is_zero()
+
+---
+diff --git a/src/sage/symbolic/expression.pyx b/src/sage/symbolic/expression.pyx
+index 11b2039..2a25707 100644
+--- a/src/sage/symbolic/expression.pyx
++++ b/src/sage/symbolic/expression.pyx
+@@ -2266,11 +2266,37 @@ cdef class Expression(CommutativeRingElement):
+         """
+         return self._gobj.is_zero()
+ 
++    def is_zero(self, simplify=False):
++        """
++        Return ``True`` if self is numerical or symbolical ``0``.
++
++        Fast simplifications are applied. For sophisticated
++        symbolic simplification specify ``simplify=True``.
++
++        EXAMPLES::
++
++            sage: y = 0
++            sage: y.is_zero()
++            True
++            sage: ex = sin(x)^2 + cos(x)^2 - 1
++            sage: ex.is_zero()
++            False
++            sage: ex.is_zero(simplify=True)
++            True
++        """
++        if simplify:
++            return (self == 0).holds()
++        else:
++            return bool(self == 0)
++
+     def __nonzero__(self):
+         """
+-        Return ``True`` if self is not the same Python object as zero.
+-        In case of an inequality of symbols/functions the decision is
+-        made according to print order.
++        Return ``True`` if self is not the same Python object as zero,
++        or if relation is trivially true.
++
++        Fast simplifications are applied. In case of an inequality
++        of symbols/functions the decision is made according to
++        alphabetical order.
+ 
+         EXAMPLES::
+ 
+@@ -2283,22 +2309,10 @@ cdef class Expression(CommutativeRingElement):
+             sage: assert(abs(x))
+             sage: assert(not x/x - 1)
+ 
+-        This is called by :meth:`is_zero`. It does no symbolic
+-        manipulation with the object::
+-
+-            sage: (sin(x)^2 + cos(x)^2 - 1).is_zero()
+-            False
+-            sage: x = 0
+-            sage: x.is_zero()
+-            True
+-
+-
+         TESTS::
+ 
+             sage: x = var('x')
+             sage: assert((x-1)^2 == x^2 - 2*x + 1)
+-            sage: assert(((x-1)^2 == x^2 - 2*x + 1).expand())
+-            sage: assert(not ((x-1)^2 == x^2 - 2*x + 3).expand())
+             sage: assert(2 + x < 3 + x)
+             sage: assert(not 2 + x < 1 + x)
+             sage: assert(2 + x > 1 + x)
+--
+cgit v0.9.2
